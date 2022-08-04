@@ -1,0 +1,131 @@
+#The following codes are based on Python language
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
+import pandas as pd
+import re
+import jieba
+from pprint import pprint
+import os
+import sys
+sys.stderr = open(os.devnull, "w")  
+import gensim
+import gensim.corpora as corpora
+from gensim.models import CoherenceModel
+sys.stderr = sys.__stderr__  
+import matplotlib.pyplot as plt
+%matplotlib inline
+
+#read the documents of litiagtion cases
+book_data = pd.read_csv("./litigation cases.csv",encoding='gbk') 
+book_titles = book_data['title'].tolist()
+book_content = book_data['content'].tolist()
+
+#data cleaning
+def clear_character(sentence):    
+    pattern = re.compile('[^\u4e00-\u9fa5]')   
+    line = re.sub(pattern, '', sentence)   
+    new_sentence = ''.join(line.split())
+    return new_sentence
+train_text = [clear_character(data) for data in book_data['content']]
+
+#Chinese segmentation
+names =[jieba.lcut(s) for s in book_titles]
+train_seg_text = [jieba.lcut(s) for s in train_text]
+
+#stop-words removal
+stop_words_path = "./stop_words.utf8"
+def get_stop_words():
+    return set([item.strip() for item in open(stop_words_path, 'r',encoding='utf-8').readlines()])
+stopwords = get_stop_words()
+def drop_stopwords(line):
+    line_clean = []
+    for word in line:
+        if word in stopwords or len(word)==1:
+            continue
+        elif word in names:
+            continue
+        else:
+            line_clean.append(word)
+    return line_clean
+train_st_text = [drop_stopwords(s) for s in train_seg_text]
+
+#make bigrams
+bigram = gensim.models.Phrases(train_st_text, min_count=5, threshold=100) 
+bigram_mod = gensim.models.phrases.Phraser(bigram)
+def make_bigrams(texts):
+    return [bigram_mod[doc] for doc in texts]
+data_words_bigrams = make_bigrams(train_st_text)
+corpus = [' '.join(line) for line in data_words_bigrams]
+
+#vector presentation
+#TF-IDF
+from sklearn.pipeline import make_pipeline
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.feature_extraction.text import HashingVectorizer, TfidfVectorizer
+vectorizer_tfidf = TfidfVectorizer(max_df=0.5, min_df=2, use_idf=True)
+X_tfidf = vectorizer_tfidf.fit_transform(corpus)
+print(X_tfidf.shape)
+#LSA
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import Normalizer
+print("Performing dimensionality reduction using LSA")
+svd = TruncatedSVD(100)
+normalizer = Normalizer(copy=False)
+lsa = make_pipeline(svd, normalizer)
+X_tfidf_lsa = lsa.fit_transform(X_tfidf)
+print(X_tfidf_lsa.shape)
+
+#build K-Means model
+from sklearn.cluster import KMeans
+km = KMeans(n_clusters=45, init='k-means++', max_iter=100, n_init=1, verbose=False)
+km_X_tfidf_lsa = km.fit(X_tfidf_lsa)
+#present the clustering results
+print("Top terms per cluster:")
+original_space_centroids = svd.inverse_transform(km_X_tfidf_lsa.cluster_centers_)
+order_centroids = original_space_centroids.argsort()[:, ::-1]
+terms = vectorizer_tfidf.get_feature_names()
+for i in range(45):
+    print("Cluster %d:" % i, end='')
+    for ind in order_centroids[i, :14]:
+        print(' %s' % terms[ind], end='')
+    print()
+#count the number of litigation cases within each cluster
+result = list(km_X_tfidf_lsa.predict(X_tfidf_lsa))
+print ('Cluster distribution:')
+print (dict([(i, result.count(i)) for i in result]))
+print(-km_X_tfidf_lsa.score(X_tfidf_lsa))
+
+#word cloud
+import os
+import jieba
+import collections 
+import numpy as np 
+import jieba
+import wordcloud
+from PIL import Image 
+import matplotlib.pyplot as plt
+
+def word_cloud():
+    contents=book_data['content'].values.tolist()
+    contents=''.join(contents)
+    clear_data=clear_character(contents)
+    seg_list_exact = jieba.lcut(clear_data, cut_all = False) 
+    object_list = drop_stopwords(seg_list_exact)
+
+    word_counts = collections.Counter(object_list) 
+    word_counts_top20 = word_counts.most_common(20) 
+    print (word_counts)
+  
+    wc =wordcloud.WordCloud(font_path="simsun.ttc",  
+                           background_color="white", 
+                           width=1500,
+                          height=960,
+                          margin=10
+                           ) 
+    wc.generate_from_frequencies(word_counts) 
+    plt.subplots(figsize=(12,8))
+    plt.imshow(wc)
+    plt.axis("off")
+    wc.to_file('./wordcloud.png')
+word_cloud()
